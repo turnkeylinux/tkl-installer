@@ -1,0 +1,596 @@
+#!/usr/bin/python3
+"""tkl-installer - opinionated CLI installer for Debian-based systems.
+
+This file wires together all the stages (from tkl_installer lib), and handles
+top-level error reporting.
+"""
+
+# import from __future__ to enable lazy evaluation
+from __future__ import annotations
+
+import argparse
+import contextlib
+import logging
+import logging.handlers
+import os
+import sys
+import tempfile
+
+from tkl_installer import runner, ui_wrapper, __version__
+from tkl_installer.config import (
+    InstallerConfig,
+    PartitionScheme,
+    load_toml,
+)
+from tkl_installer.disks import wipe_disk
+from tkl_installer.installer import (
+    copy_installer_log,
+    generate_fstab,
+    install_grub,
+    prepare_live_media_for_reboot,
+    run_extra_commands,
+    unpack_rootfs,
+)
+from tkl_installer.interactive import run_interactive
+from tkl_installer.partitioner import (
+    apply_scheme,
+    mount_partitions,
+    unmount_partitions,
+)
+
+LOG_FILE: str = ""
+
+# 130 is Linux convention for SIGINT - i.e. hitting Ctrl-C
+# system error code (128) + signal signal code (SIGINT = 2)
+_CTRL_C_EXIT_CODE = 130
+
+ui = ui_wrapper.UI()
+
+
+def _setup_logging() -> str:
+    """Configure logging.
+
+    1. A temporary file (always, at DEBUG level) - copied onto the
+       installed system after a successful install.
+    2. The systemd journal via logging.handlers.SysLogHandler pointing at
+       /dev/log (present on any systemd live image).  Falls back silently
+       if /dev/log is unavailable.
+
+    Returns the path of the log file.
+    """
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)  # capture everything; handlers filter
+
+    fmt_detail = logging.Formatter(
+        "%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
+        "%Y-%m-%dT%H:%M:%S",
+    )
+    # file handler - always DEBUG
+    log_fd, log_path = tempfile.mkstemp(prefix="tkl-installer-", suffix=".log")
+    os.close(log_fd)
+    fh = logging.FileHandler(log_path, encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(fmt_detail)
+    root.addHandler(fh)
+
+    # systemd journal (or syslog)
+    for syslog_addr in ("/dev/log", "/run/systemd/journal/syslog"):
+        if os.path.exists(syslog_addr):
+            try:
+                sh = logging.handlers.SysLogHandler(address=syslog_addr)
+                sh.setLevel(logging.DEBUG)
+                sh.setFormatter(
+                    logging.Formatter("tkl-installer: %(message)s"),
+                )
+                root.addHandler(sh)
+                logging.getLogger(__name__).debug(
+                    "Logging to systemd journal via %s",
+                    syslog_addr,
+                )
+            except OSError:
+                pass
+            break
+    logging.getLogger(__name__).info("Log file: %s", log_path)
+    return log_path
+
+
+_BASIC_EPILOG = "Use --help-all for advanced options and examples."
+
+_FULL_EPILOG = """
+Examples:
+  # Fully interactive:
+  tkl-installer
+
+  # Skip disk question:
+  tkl-installer --disk /dev/sda
+
+  # Non-interactive from config:
+  tkl-installer --config /path/to/install.toml
+
+  # Dry run (no writes):
+  tkl-installer --dry-run --disk /dev/sda --scheme guided
+
+  # Fully unattended install to an empty disk:
+  tkl-installer --unattended --disk /dev/sda --scheme guided-lvm
+
+  # Fully unattended install, wiping existing data:
+  tkl-installer --unattended --force-wipe --disk /dev/sda --scheme guided
+
+  # Manual plain layout, /boot inside /, sizes specified:
+  tkl-installer --scheme manual --no-separate-boot --no-manual-lvm \\
+      --manual-swap-mb 2048
+
+  # Manual LVM layout with separate /boot:
+  tkl-installer --scheme manual --separate-boot --manual-lvm \\
+      --manual-lv-swap-mb 2048
+"""
+
+
+def _build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
+    """Build and return (basic_parser, full_parser).
+
+    basic_parser  - common options only; used for --help output.
+    full_parser   - all options (inherits from basic_parser via parents);
+                    used for actual argument parsing and --help-all output.
+    Both parsers have add_help=False so we control -h/--help ourselves.
+    """
+    # --- shared / common arguments ---
+    common = argparse.ArgumentParser(
+        add_help=False,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    common.add_argument(
+        "-c",
+        "--config",
+        metavar="FILE",
+        help="TOML configuration file (all options can be set here).",
+    )
+    common.add_argument(
+        "--disk",
+        metavar="DEVICE",
+        help="Target disk device (e.g. /dev/sda). Skips disk selection.",
+    )
+    common.add_argument(
+        "--scheme",
+        choices=["guided", "guided-lvm", "manual"],
+        metavar="TYPE",
+        help="Partitioning scheme: guided, guided-lvm, or manual.",
+    )
+    common.add_argument(
+        "--squashfs",
+        metavar="PATH",
+        help="Path to the rootfs squashfs file (default: auto-detected).",
+    )
+    common.add_argument(
+        "--mount-root",
+        metavar="PATH",
+        default="",
+        help="Target filesystem mount point (default: /mnt/target).",
+    )
+
+    # /boot placement
+    boot_grp = common.add_mutually_exclusive_group()
+    boot_grp.add_argument(
+        "--separate-boot",
+        dest="separate_boot",
+        action="store_true",
+        default=None,
+        help="Create a dedicated /boot partition.",
+    )
+    boot_grp.add_argument(
+        "--no-separate-boot",
+        dest="separate_boot",
+        action="store_false",
+        help="/boot lives inside / - no separate partition (default).",
+    )
+
+    common.add_argument(
+        "--force-wipe",
+        action="store_true",
+        default=False,
+        help="Wipe target disk without prompting, even if it contains data.",
+    )
+    common.add_argument(
+        "--unattended",
+        action="store_true",
+        default=False,
+        help="Never ask questions interactively. Uses defaults where possible;"
+        " fails if mandatory options are missing.",
+    )
+    common.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Simulate all destructive actions without executing them.",
+    )
+    common.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Enable verbose/debug logging.",
+    )
+    common.add_argument(
+        "-V",
+        "--version",
+        action="store_true",
+        help="Show version and exit.",
+    )
+
+    # --- basic parser (common args + basic help/help-all hooks) ---
+    basic = argparse.ArgumentParser(
+        prog="tkl-installer",
+        description="Opinionated CLI installer for TurnKey Linux. Also"
+        " compatible with most other Debian-based systems.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        parents=[common],
+        add_help=False,
+        epilog=_BASIC_EPILOG,
+    )
+    basic.add_argument(
+        "-h",
+        "--help",
+        action="store_true",
+        default=False,
+        help="Show common options and exit.",
+    )
+    basic.add_argument(
+        "--help-all",
+        action="store_true",
+        default=False,
+        help="Show all options (including advanced) and examples, then exit.",
+    )
+
+    # --- full parser (inherits common + adds advanced args) ---
+    full = argparse.ArgumentParser(
+        prog="tkl-installer",
+        description="Opinionated CLI installer for TurnKey Linux. Also"
+        " compatible with most other Debian-based systems.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        parents=[common],
+        add_help=False,
+        epilog=_FULL_EPILOG,
+    )
+    full.add_argument(
+        "-h",
+        "--help",
+        action="store_true",
+        default=False,
+        help="Show common options and exit.",
+    )
+    full.add_argument(
+        "--help-all",
+        action="store_true",
+        default=False,
+        help="Show all options (including advanced) and examples, then exit.",
+    )
+
+    # /boot + LVM choice (advanced - shown only in --help-all)
+    lvm_grp = full.add_mutually_exclusive_group()
+    lvm_grp.add_argument(
+        "--manual-lvm",
+        dest="manual_lvm",
+        action="store_true",
+        default=None,
+        help="Use LVM for manual partitioning layout.",
+    )
+    lvm_grp.add_argument(
+        "--no-manual-lvm",
+        dest="manual_lvm",
+        action="store_false",
+        help="Use plain GPT partitions for manual layout (default).",
+    )
+
+    # Manual partition sizes
+    manual_grp = full.add_argument_group(
+        "manual partition sizes",
+        "Sizes in MiB for manual partitioning (--scheme manual only). "
+        "0 or omitted = use default / ask interactively.",
+    )
+    manual_grp.add_argument(
+        "--manual-efi-mb",
+        metavar="MiB",
+        type=int,
+        default=0,
+        help="EFI System Partition size in MiB (UEFI only).",
+    )
+    manual_grp.add_argument(
+        "--manual-boot-mb",
+        metavar="MiB",
+        type=int,
+        default=0,
+        help="/boot partition size in MiB (only used with --separate-boot).",
+    )
+    manual_grp.add_argument(
+        "--manual-swap-mb",
+        metavar="MiB",
+        type=int,
+        default=0,
+        help="Swap partition size in MiB (plain layout only).",
+    )
+
+    # Manual LVM sizes
+    lvm_size_grp = full.add_argument_group(
+        "manual LVM sizes",
+        "LVM-specific sizes in MiB (only used when --manual-lvm is set). "
+        "0 or omitted = use default / ask interactively.",
+    )
+    lvm_size_grp.add_argument(
+        "--manual-pv-mb",
+        metavar="MiB",
+        type=int,
+        default=0,
+        help="LVM Physical Volume partition size in MiB (0 = remainder).",
+    )
+    lvm_size_grp.add_argument(
+        "--manual-lv-root-mb",
+        metavar="MiB",
+        type=int,
+        default=0,
+        help="Root LV (/) size in MiB (0 = remainder of VG after swap).",
+    )
+    lvm_size_grp.add_argument(
+        "--manual-lv-swap-mb",
+        metavar="MiB",
+        type=int,
+        default=0,
+        help="Swap LV size in MiB (0 = calculated from disk/RAM).",
+    )
+
+    # Misc advanced
+    full.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        default=False,
+        help="Assume yes for all confirmations (dangerous!).",
+    )
+
+    return basic, full
+
+
+def main() -> int:
+
+    basic_parser, full_parser = _build_parser()
+    args = full_parser.parse_args()
+
+    if args.help:
+        basic_parser.print_help()
+        return 0
+
+    if args.help_all:
+        full_parser.print_help()
+        return 0
+
+    if args.version:
+        # hard coded version string from __init__ for now.
+        # better option/s:
+        # - if git repo:
+        #   - use autoversion / generate dynamically from git repo.
+        # - if installed via apt/dpkg:
+        #       - parse /usr/share/doc/tkl-installer/changelog.gz.
+        #       - via dpkg-query.
+        print(__version__)
+        sys.exit(0)
+
+    # load base config
+    cfg = InstallerConfig()
+
+    if args.config:
+        try:
+            cfg = load_toml(args.config)
+            cfg.config_file = args.config
+        except FileNotFoundError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        # catching bare exceptions is bad practice, but we want the installer
+        # to be extremely robust and not leave the system in a broken state
+        # if possible - although may need further thought...
+        except Exception as e:  # noqa: BLE001
+            print(f"Error reading config file: {e}", file=sys.stderr)
+            return 1
+
+    # CLI overrides
+    if args.disk:
+        cfg.disk = args.disk
+    if args.scheme:
+        cfg.scheme_type = args.scheme
+    if args.squashfs:
+        cfg.squashfs_path = args.squashfs
+    if args.mount_root:
+        cfg.mount_root = args.mount_root
+    if args.dry_run:
+        cfg.dry_run = True
+    if args.verbose:
+        cfg.verbose = True
+    if args.force_wipe:
+        cfg.force_wipe = True
+    if args.unattended:
+        cfg.unattended = True
+
+    # /boot placement (tri-state: None = not set on CLI, True/False = explicit)
+    if args.separate_boot is not None:
+        cfg.separate_boot = args.separate_boot
+
+    # manual LVM choice (tri-state: same pattern)
+    if args.manual_lvm is not None:
+        cfg.manual_lvm = args.manual_lvm
+
+    # manual partition sizes - only override if the user explicitly passed a
+    # non-zero value; zero is the "not set" sentinel for size fields.
+    mp = cfg.manual_partition
+    if args.manual_efi_mb:
+        mp.efi_mb = args.manual_efi_mb
+    if args.manual_boot_mb:
+        mp.boot_mb = args.manual_boot_mb
+    if args.manual_swap_mb:
+        mp.swap_mb = args.manual_swap_mb
+    if args.manual_pv_mb:
+        mp.pv_mb = args.manual_pv_mb
+    if args.manual_lv_root_mb:
+        mp.lv_root_mb = args.manual_lv_root_mb
+    if args.manual_lv_swap_mb:
+        mp.lv_swap_mb = args.manual_lv_swap_mb
+
+    # setup
+    _setup_logging()
+    log = logging.getLogger(__name__)
+
+    if cfg.dry_run:
+        runner.DRY_RUN = True
+        ui.warn(
+            "DRY-RUN mode - no destructive operations will be performed.",
+        )
+
+    # under normal conditions user should always be root, but double check
+    if os.geteuid() != 0:
+        ui.fatal("root privileges required")
+
+    # if installed from deb, should always have these (pkg depends) but include
+    # checks anyway...
+    try:
+        runner.require_commands(
+            # dosfstools - small package; only required for UEFI
+            "mkfs.vfat",
+            # e2fsprogs - large install (inc deps); bin (udeb) previously
+            # packaged in di-live
+            "mkfs.ext4",
+            # fdisk - small package - already included by default in TKL
+            "sfdisk",
+            # grub2-common - "required" pkg - used by both legacy bios & uefi
+            "grub-install",
+            # mount - "required" pkg
+            "mount",
+            "umount",
+            # parted - bin (udeb) previously packaged in di-live
+            "partprobe",
+            # squashfs-tools
+            "unsquashfs",
+            # udev - already installed in TKL
+            "udevadm",
+            # util-linx - "required package" - so always installed
+            "blkid",
+            "lsblk",
+            "mkswap",
+            "wipefs",
+        )
+    except RuntimeError as e:
+        ui.fatal(str(e))
+
+    # interactive "wizard"
+    try:
+        cfg = run_interactive(cfg)
+    except KeyboardInterrupt:
+        ui.warn("Interrupted by user.")
+        return _CTRL_C_EXIT_CODE
+    except SystemExit:
+        raise
+    except Exception as e:  # noqa: BLE001
+        log.debug("Wizard exception", exc_info=True)
+        ui.fatal(f"Unexpected error during setup: {e}")
+
+    # install stages
+
+    scheme = cfg.scheme
+    if scheme is None:
+        ui.fatal("Internal error: no partition scheme was created.")
+
+    try:
+        # wipe
+        ui.header("Wiping Disk")
+        with ui.please_wait(f"Wiping {cfg.disk}..."):
+            wipe_disk(cfg.disk)
+
+        # partition + format
+        ui.header("Partitioning")
+        with ui.please_wait("Writing partition table and formatting..."):
+            apply_scheme(scheme)
+
+        # mount
+        ui.header("Mounting")
+        with ui.please_wait(
+            f"Mounting partitions under {cfg.mount_root}...",
+        ):
+            mount_partitions(scheme, cfg.mount_root)
+
+        # unpack rootfs
+        ui.header("Installing Root Filesystem")
+        ui.step(f"Unpacking {cfg.squashfs_path} -> {cfg.mount_root}")
+        ui.info("This may take several minutes...")
+        unpack_rootfs(cfg.squashfs_path, cfg.mount_root)
+        ui.ok("Root filesystem installed.")
+
+        # fstab
+        ui.header("Configuring System")
+        with ui.please_wait("Generating /etc/fstab..."):
+            generate_fstab(scheme, cfg.mount_root)
+
+        # bootloader
+        with ui.please_wait("Installing GRUB bootloader..."):
+            install_grub(scheme, cfg.mount_root)
+        ui.ok("Bootloader installed.")
+
+        # extra commands
+        if cfg.extra_commands:
+            ui.header("Running Post-Install Commands")
+            run_extra_commands(cfg.extra_commands, cfg.mount_root)
+            ui.ok("Post-install commands complete.")
+
+        with ui.please_wait("Copying installer log to target..."):
+            copy_installer_log(LOG_FILE, cfg.mount_root)
+
+    except runner.RunError as e:
+        ui.error(f"Installation failed: {e}")
+        log.debug("RunError detail", exc_info=True)
+        _emergency_unmount(scheme, cfg.mount_root)
+        return 1
+
+    except Exception as e:  # noqa: BLE001
+        ui.error(f"Unexpected error during install: {e}")
+        log.debug("Exception detail", exc_info=True)
+        _emergency_unmount(scheme, cfg.mount_root)
+        return 1
+
+    # cleanup & reboot
+    ui.header("Finishing Up")
+    with ui.please_wait("Unmounting filesystems..."):
+        unmount_partitions(scheme, cfg.mount_root)
+
+    ui.ok("Installation complete!")
+
+    if cfg.reboot_after is None:
+        do_reboot = ui.confirm(
+            "Would you like to reboot into the newly installed system now?",
+            default=True,
+        )
+    else:
+        do_reboot = cfg.reboot_after
+
+    if do_reboot:
+        ui.step("Preparing installation media for removal...")
+        prepare_live_media_for_reboot()
+        ui.warn(
+            "Please REMOVE the live installation medium (USB/CD/DVD) now,\n"
+            "    then press Enter to reboot.",
+        )
+        with contextlib.suppress(EOFError, KeyboardInterrupt):
+            input()
+        runner.run(["reboot"], destructive=True, check=False)
+    else:
+        ui.step(
+            "Returning to live environment. You may run the installer again if"
+            " needed.",
+        )
+
+    return 0
+
+
+def _emergency_unmount(scheme: PartitionScheme, mount_root: str) -> None:
+    """Best-effort cleanup after a failed install."""
+    with contextlib.suppress(Exception):
+        unmount_partitions(scheme, mount_root)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

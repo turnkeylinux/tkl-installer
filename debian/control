@@ -1,0 +1,47 @@
+Source: tkl-installer
+Section: admin
+Priority: optional
+Maintainer: Jeremy Davis <jeremy@turnkeylinux.org>
+Build-Depends:
+ debhelper-compat (= 13),
+ python3 (>= 3.13),
+ dh-python,
+ pybuild-plugin-pyproject,
+ python3-dialog,
+Standards-Version: 4.7.2
+Vcs-Git: https://github.com/turnkeylinux/tkl-installer.git
+Vcs-Browser: https://github.com/turnkeylinux/tkl-installer
+Rules-Requires-Root: no
+
+Package: tkl-installer
+Architecture: all
+Depends:
+ python3 (>= 3.13),
+ python3-dialog,
+ ${python3:Depends},
+ os-prober,
+ live-boot-initramfs-tools,
+ live-boot,
+ live-tools,
+ fdisk,
+ dosfstools,
+ e2fsprogs,
+ grub2-common,
+ lvm2,
+ parted,
+ squashfs-tools,
+ udev,
+ ${misc:Depends},
+Conflicts:
+ di-live (<= 2.0.0),
+Breaks:
+ di-live (<= 2.0.0),
+Recommends:
+ eject,
+ file,
+ kbd,
+Description: TurnKey CLI OS installer for Debian based Live systems
+ The TurnKey installer is a minimalist CLI installer for Live systems written
+ from scratch. Covers disk detection, partitioning, formatting, install
+ (rootfs from ISO) and grub configuration. Replaces TurnKey's debian-installer
+ based installer; di-live.

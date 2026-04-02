@@ -1,0 +1,87 @@
+# tkl-installer configuration file
+# All options are optional; unset options are asked interactively.
+# Run: tkl-installer --config /path/to/this/file
+
+# Path to the rootfs squashfs (auto-detected from live media if omitted).
+# squashfs_path = "/run/live/medium/live/filesystem.squashfs"
+
+# Target block device.  If omitted, detected/asked interactively.
+# disk = "/dev/sda"
+
+# Wipe the target disk without asking.  Only takes effect if disk is set.
+# wipe_disk = true
+
+# Wipe the target disk even if it contains existing data, without prompting.
+# In unattended mode, failing to set this when the disk has data is a fatal
+# error.
+# force_wipe = false
+
+# Never ask questions interactively.  Uses defaults where possible; fails if
+# mandatory options (disk, scheme_type, etc.) are not pre-configured.
+# Combine with force_wipe = true if the target disk may have existing data.
+# unattended = false
+
+# Partitioning scheme: "guided" | "guided-lvm" | "manual"
+# scheme_type = "guided"
+
+# Whether to create a separate /boot partition.
+# false (default) = /boot lives inside /  (simpler, saves ~1 GiB)
+# true            = dedicated /boot partition
+# Note: a future "guided-luks-lvm" scheme will always require separate_boot.
+# separate_boot = false
+
+# Where to mount the target filesystem during install.
+mount_root = "/mnt/target"
+
+# Reboot automatically after install?  Omit to ask interactively.
+# reboot_after = true
+
+# Extra shell commands to run inside the chroot after install.
+# Failures are logged as warnings but do not abort.
+# extra_commands = [
+#     "apt-get update -q",
+#     "apt-get install -y openssh-server",
+#     "systemctl enable ssh",
+# ]
+
+# Enable verbose/debug logging.
+# verbose = false
+
+# Dry-run: log all destructive operations without executing them.
+# dry_run = false
+
+
+# ---------------------------------------------------------------------------
+# Manual partitioning options
+# Only used when scheme_type = "manual".  Any value set to 0 (or omitted)
+# will use a sensible default or be asked interactively.
+# LVM-related fields (pv_mb, lv_*) are ignored unless lvm = true.
+# ---------------------------------------------------------------------------
+# [manual-partition]
+
+# Use LVM for the manual layout?
+# false (default) = plain GPT partitions
+# true            = one LVM PV/VG with logical volumes for root and swap
+# lvm = false
+
+# EFI System Partition size in MiB (UEFI systems only).
+# efi_mb = 512
+
+# /boot partition size in MiB.  Only relevant when separate_boot = true.
+# boot_mb = 1024
+
+# --- Plain (non-LVM) sizes ---
+
+# Swap partition size in MiB.  0 = calculated from disk/RAM.
+# swap_mb = 2048
+
+# --- LVM sizes (only used when lvm = true) ---
+
+# LVM Physical Volume partition size in MiB.  0 = remainder of disk.
+# pv_mb = 0
+
+# Root logical volume (/) size in MiB.  0 = remainder of VG after swap.
+# lv_root_mb = 0
+
+# Swap logical volume size in MiB.  0 = calculated from disk/RAM.
+# lv_swap_mb = 2048

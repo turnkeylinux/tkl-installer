@@ -1,0 +1,16 @@
+[Unit]
+Description=tkl-installer: TurnKey Linux installer
+ConditionKernelCommandLine=tkl-installer
+
+[Service]
+Type=idle
+StandardInput=tty-force
+StandardOutput=inherit
+TTYReset=yes
+ExecStartPre=/usr/bin/echo "Starting tkl-installer..."
+ExecStart=/usr/bin/tkl-installer
+# no need to wait when stopping
+TimeoutStopSec=0
+
+[Install]
+WantedBy=rescue.target

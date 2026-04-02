@@ -1,0 +1,112 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tkl-installer"
+version = "0.1.0"
+authors = [{name = "TurnKey GNU/Linux maintainers", email = "admin@turnkeylinux.org"}]
+description = "TurnKey Linux CLI OS installer, probably compatible with any Debian-based system"
+readme = "README.md"
+requires-python = ">=3.13"  # probably works with older versions of python3
+license = "MIT"
+dependencies = ["dialog"]  # otherwise stdlib only; system tools via subprocess
+
+[project.urls]
+Homepage = "https://github.com/turnkeylinux/tkl-installer"
+
+[tool.setuptools]
+packages = ["tkl_installer"]
+script-files = ["tkl-installer"]
+include-package-data = false
+
+[tool.setuptools.package-data]
+tkl_installer = ["py.typed"]
+
+[tool.ruff]
+line-length = 79
+indent-width = 4
+target-version = "py313"
+exclude = [
+    ".git",
+    "__pycache__",
+    ".mypy_cache",
+    ".ruff_cache",
+]
+[tool.ruff.lint]
+# Enable all rules by default - then exclude specific ones as required
+select = ["ALL"]
+ignore = [
+    ### Project specific config (general conf below)
+
+    # allow "untrusted" subprocess command/s - all commands use arguments
+    # determined internaly or are validated
+    "S603",
+
+    # allow insecure usage of temporary file/dir
+    "S108",
+
+    ### General config ###
+    # 'incorrect-blank-line-before-class' (D203) and
+    # 'no-blank-line-before-class' (D211) are incompatible
+    "D211",
+
+    # 'multi-line-summary-first-line' (D212) and
+    # 'multi-line-summary-second-line` (D213) are incompatible
+    "D213",
+
+    # silence TODO format warnings - but keep FIX002 (consider fixing)
+    "TD002", "TD003", "TD004",
+
+    # allow usage of print()
+    "T201",
+
+    # don't enforce use of pathlib.Path
+    "PTH", "PTH118", "PTH119", "PTH123",
+
+    # allow usage of bool args in functions/methods
+    "FBT001", "FBT002",
+
+    # don't complain about function/method complexity
+    "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915",
+
+    # don't enforce docstrings in all classes, methods &/or functions
+    "D101", "D102", "D103", "D107",
+
+    # don't enforce blank line before or after class docstring
+    "D203", "D204",
+
+    # disable restrictions on exception strings
+    "EM101", "EM102", "TRY003",
+
+    # allow use of "magic values" rather than enforcing use of constants
+    "PLR2004"
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# Like Black, respect magic trailing commas.
+skip-magic-trailing-comma = false
+
+# Like Black, automatically detect the appropriate line ending.
+line-ending = "auto"
+
+# Enable auto-formatting of code examples in docstrings. Markdown,
+# reStructuredText code/literal blocks and doctests are all supported.
+#
+# This is currently disabled by default, but it is planned for this
+# to be opt-out in the future.
+docstring-code-format = false
+
+# Set the line length limit used when formatting code snippets in
+# docstrings.
+#
+# This only has an effect when the `docstring-code-format` setting is
+# enabled.
+docstring-code-line-length = "dynamic"
+
+[tool.mypy]
+# use local python-dialog type stub (generated with stubgen)
+mypy_path = "type_stubs"
