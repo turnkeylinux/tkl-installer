@@ -1,6 +1,7 @@
 import abc
-from _typeshed import Incomplete
 from typing import NamedTuple
+
+from _typeshed import Incomplete
 
 class _VersionInfo(NamedTuple):
     major: Incomplete
@@ -229,7 +230,7 @@ class Dialog:
         **kwargs,
     ) -> None: ...
     def gauge_update(
-        self, percent, text: str = "", update_text: bool = False
+        self, percent, text: str = "", update_text: bool = False,
     ) -> None: ...
     def gauge_iterate(*args, **kwargs) -> None: ...
     @widget
@@ -240,7 +241,7 @@ class Dialog:
     def infobox(self, text, height=None, width=None, **kwargs): ...
     @widget
     def inputbox(
-        self, text, height=None, width=None, init: str = "", **kwargs
+        self, text, height=None, width=None, init: str = "", **kwargs,
     ): ...
     @widget
     def inputmenu(
@@ -279,11 +280,11 @@ class Dialog:
     @widget
     @retval_is_code
     def pause(
-        self, text, height=None, width=None, seconds: int = 5, **kwargs
+        self, text, height=None, width=None, seconds: int = 5, **kwargs,
     ): ...
     @widget
     def passwordbox(
-        self, text, height=None, width=None, init: str = "", **kwargs
+        self, text, height=None, width=None, init: str = "", **kwargs,
     ): ...
     @widget
     @retval_is_code
