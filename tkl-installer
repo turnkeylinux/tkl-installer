@@ -16,7 +16,7 @@ import os
 import sys
 import tempfile
 
-from tkl_installer import runner, ui_wrapper, __version__
+from tkl_installer import __version__, runner, ui_wrapper
 from tkl_installer.config import (
     InstallerConfig,
     PartitionScheme,
