@@ -1,16 +1,20 @@
 # cached dev files
-.ruff_cache
-.mypy_cache
-__pycache__
+**/__pycache__/
+.mypy_cache/
+.ruff_cache/
+**/*.swp
 
-# build files - inc deb packaging
+# python build assets
 .pybuild/
 build/
-tkl_installer.egg-info/
+*.egg-info/
+
+# deb package build assests
+debian/tkl-installer/
+
 debian/.debhelper/
 debian/debhelper-build-stamp
+debian/*.debhelper.log
+debian/*.debhelper
+debian/*.substvars
 debian/files
-debian/tkl-installer.substvars
-debian/tkl-installer/
-debian/tkl-installer.postinst.debhelper
-debian/tkl-installer.prerm.debhelper
