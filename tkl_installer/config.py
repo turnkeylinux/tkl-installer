@@ -14,9 +14,9 @@ from os.path import exists
 
 log = logging.getLogger(__name__)
 
-# Remove tkl-installer and deps as last step. This will run before any
-# additional 'extra_commands' in config file.
-rm_installer = "apt-get purge --autoremove tkl-installer"
+# Remove tkl-installer and deps from installed system as last step. This will
+# run before any additional 'extra_commands' (in config file).
+rm_installer = "apt-get purge --yes --autoremove tkl-installer live-*"
 
 
 @dataclass
