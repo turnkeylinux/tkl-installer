@@ -528,12 +528,14 @@ def _teardown_lvm(check: bool = False) -> None:
     """Deactivate LVM and remove device-mapper devices.
 
     Called on failure to ensure the kernel releases stale LV references
-    so a subsequent install attempt can run pvcreate cleanly.
+    so a subsequent install attempt can run pvcreate cleanly. Will also disable
+    all swap as there may be a swap LV.
 
     Args:
         check (bool): If ``True``, raise ``RunError`` on failure.
             Defaults to ``False`` so teardown is best-effort.
 
     """
+    run(["swapoff", "--all"], check=check, destructive=True, capture=True)
     run(["vgchange", "-an"], check=check, destructive=True, capture=True)
     run(["dmsetup", "remove_all"], check=check, destructive=True, capture=True)

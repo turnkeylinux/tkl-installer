@@ -16,7 +16,7 @@ import os
 import sys
 import tempfile
 
-from tkl_installer import runner, ui_wrapper, __version__
+from tkl_installer import __version__, runner, ui_wrapper
 from tkl_installer.config import (
     InstallerConfig,
     PartitionScheme,
@@ -37,8 +37,6 @@ from tkl_installer.partitioner import (
     mount_partitions,
     unmount_partitions,
 )
-
-LOG_FILE: str = ""
 
 # 130 is Linux convention for SIGINT - i.e. hitting Ctrl-C
 # system error code (128) + signal signal code (SIGINT = 2)
@@ -434,7 +432,7 @@ def main() -> int:
         mp.lv_swap_mb = args.manual_lv_swap_mb
 
     # setup
-    _setup_logging()
+    log_file = _setup_logging()
     log = logging.getLogger(__name__)
 
     if cfg.dry_run:
@@ -538,7 +536,7 @@ def main() -> int:
             ui.ok("Post-install commands complete.")
 
         with ui.please_wait("Copying installer log to target..."):
-            copy_installer_log(LOG_FILE, cfg.mount_root)
+            copy_installer_log(log_file, cfg.mount_root)
 
     except runner.RunError as e:
         ui.error(f"Installation failed: {e}")

@@ -14,6 +14,10 @@ from os.path import exists
 
 log = logging.getLogger(__name__)
 
+# Remove tkl-installer and deps from installed system as last step. This will
+# run before any additional 'extra_commands' (in config file).
+rm_installer = "apt-get purge --yes --autoremove tkl-installer live-*"
+
 
 @dataclass
 class PartitionEntry:
@@ -169,6 +173,7 @@ class InstallerConfig:
             ``.config.PartitionScheme``.
         extra_commands (list[str]): Shell commands run inside the chroot
             after installation.  Each item is passed to ``/bin/bash -c``.
+            Must be in a config file (not asked & no switch).
         reboot_after (bool | None): ``True`` = reboot automatically;
             ``False`` = return to live environment; ``None`` = ask.
         dry_run (bool): Log all destructive operations without executing
@@ -211,6 +216,10 @@ class InstallerConfig:
     verbose: bool = False
     unattended: bool = False
     config_file: str = ""
+
+    def __post_init__(self) -> None:
+        """Remove installer before any other post install commands."""
+        self.extra_commands.insert(0, rm_installer)
 
 
 # TOML loader
