@@ -5,12 +5,13 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+from glob import glob
 from os.path import dirname, isfile, join
 from typing import Any
 
 from .config import PartitionScheme  # noqa: TC001
 from .partitioner import _dev_path
-from .runner import RunError, run, run_lines, run_output
+from .runner import RunError, run, run_output
 
 log = logging.getLogger(__name__)
 
@@ -393,11 +394,25 @@ def prepare_live_media_for_reboot() -> None:
     Best-effort; non-fatal.  Calls ``sync`` then attempts to eject any
     CD/DVD drives found under ``/dev/sr*``.
     """
-    run(["sync"], check=False, destructive=True)
-    try:
-        cdrom_devs = run_lines(["find", "/dev", "-name", "sr*", "-type", "b"])
-        for dev in cdrom_devs:
-            run(["eject", dev], check=False, destructive=True)
+    sync = run(["sync"], check=False, destructive=True)
+    if sync.returncode != 0:
+        log.error(
+            "sync exited %d (%s)- filesystem buffers may not be flushed",
+            sync.returncode,
+            sync.stderr,
+        )
+    sr_devs = glob("/dev/sr*")
+    if not sr_devs:
+        log.debug("No optical drives found - skipping eject")
+        return
+    for dev in sr_devs:
+        eject = run(["eject", dev], check=False, destructive=True)
+        if eject.returncode == 0:
             log.info("Ejected %s", dev)
-    except Exception as e:  # noqa: BLE001
-        log.debug("eject attempt: %s", e)
+        else:
+            log.warning(
+                "eject %s exited %d (%s)",
+                dev,
+                eject.returncode,
+                eject.stderr,
+            )
