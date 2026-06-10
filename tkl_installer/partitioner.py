@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from os.path import ismount
 
 from .config import PartitionEntry, PartitionScheme
 from .disks import DiskInfo, _device_name_sort_key
@@ -299,14 +300,16 @@ def unmount_partitions(scheme: PartitionScheme, mount_root: str) -> None:
         reverse=True,  # deepest first
     )
 
+    remaining = set(mounted)
     for mp in mounted:
         try:
             run(["umount", "-l", mp], destructive=True)
             log.info("Unmounted %s", mp)
+            remaining.discard(mp)
         except RunError as e:
             log.warning("Could not unmount %s: %s", mp, e)
 
-    if mount_root not in mounted:
+    if mount_root in remaining or ismount(mount_root):
         run(["umount", "-l", mount_root], check=False, destructive=True)
 
 
