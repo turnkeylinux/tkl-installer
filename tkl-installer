@@ -570,7 +570,7 @@ def main() -> int:
         prepare_live_media_for_reboot()
         ui.warn(
             "Please REMOVE the live installation medium (USB/CD/DVD) now,\n"
-            "    then press Enter to reboot.",
+            "    then press Enter twice to reboot.",
         )
         with contextlib.suppress(EOFError, KeyboardInterrupt):
             input()
