@@ -391,8 +391,8 @@ def copy_installer_log(log_path: str, target: str) -> None:
 def prepare_live_media_for_reboot() -> None:
     """Attempt to unmount or eject live media so the system can reboot cleanly.
 
-    Best-effort; non-fatal.  Calls ``sync`` then attempts to eject any
-    CD/DVD drives found under ``/dev/sr*``.
+    Best-effort; non-fatal. Calls ``sync`` then attempts to eject any CD/DVD
+    drives found under ``/dev/sr*``.
     """
     sync = run(["sync"], check=False, destructive=True)
     if sync.returncode != 0:
@@ -401,6 +401,7 @@ def prepare_live_media_for_reboot() -> None:
             sync.returncode,
             sync.stderr,
         )
+    # We probably should also look for & eject USB drives here too?!
     sr_devs = glob("/dev/sr*")
     if not sr_devs:
         log.debug("No optical drives found - skipping eject")
